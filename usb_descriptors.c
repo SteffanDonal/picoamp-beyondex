@@ -149,11 +149,11 @@ enum {
 char const *string_desc_arr[] =
 {
   (const char[]) { 0x09, 0x04 },  // 0: is supported language is English (0x0409)
-  "sctanf",                     // 1: Manufacturer
-  "Pico Amp 2",                     // 2: Product
+  "Fluid Immersive, Inc.",                     // 1: Manufacturer
+  "Beyondex HD Audio",                     // 2: Product
   NULL,                           // 3: Serials will use unique ID if possible
-  "Pico Amp 2",            // 4: Audio Interface
-  "Pico Amp 2",          // 5: Audio Interface
+  "Beyondex HD Audio",            // 4: Audio Interface
+  "Beyondex HD Audio",          // 5: Audio Interface
 };
 
 static uint16_t _desc_str[32 + 1];

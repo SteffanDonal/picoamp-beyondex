@@ -51,7 +51,7 @@ biquad(eq_bq_18)
  *  3: ksc75 v1
  *  4: s05 v5
  */
-#define USE_EQ 0
+#define USE_EQ -2
 
 #include "eq_configs.h"
 #include "eq_default_config.h"

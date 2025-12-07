@@ -32,13 +32,13 @@ static void audio_set_volume(int16_t v, int8_t ch)
 {
     int32_t vol_mul;
 
-    int16_t pos = -v / 256;
+    int16_t pos = (-v / 256) + 3;
     int16_t mix = -v % 256; // mix between two steps
 
-    if (pos > 101)
+    if (pos >= 100)
         vol_mul = 0;
-    else if (pos >= 100)
-        vol_mul = (db_to_vol_hp[100] * (256 - mix)) >> 8;
+    else if (pos == 99)
+        vol_mul = (db_to_vol_hp[99] * (256 - mix)) >> 8;
     else
         vol_mul = (((int64_t)db_to_vol_hp[pos] * (256 - mix)) + ((int64_t)db_to_vol_hp[pos + 1] * mix)) >> 8;
 

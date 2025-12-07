@@ -32,7 +32,7 @@ static void audio_set_volume(int16_t v, int8_t ch)
 {
     int32_t vol_mul;
 
-    int16_t pos = (-v / 256) + 3;
+    int16_t pos = (-v / 256) + 3; // 3dB offset to avoid clipping and keep volume in safe range
     int16_t mix = -v % 256; // mix between two steps
 
     if (pos >= 100)

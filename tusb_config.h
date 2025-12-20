@@ -157,6 +157,8 @@ extern "C" {
 
 #define CFG_TUD_AUDIO_ENABLE_FEEDBACK_EP    1
 
+#define CFG_TUD_AUDIO_ENABLE_FEEDBACK_FORMAT_CORRECTION 1
+
 #ifdef __cplusplus
 }
 #endif

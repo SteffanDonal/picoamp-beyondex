@@ -465,10 +465,11 @@ void audio_task(void)
       // Low pass filter to smooth out jitter from USB packet arrival timing
       avg_length_us = (avg_length_us * 63 + length_us) >> 6; 
 
-      //Windowsの許容するフィードバック量
-      uint32_t min_feedback = (current_sample_rate / 1000 - 1) << 16;
-      uint32_t max_feedback = (current_sample_rate / 1000 + 1) << 16;
-      uint32_t feedback_range = 2 << 16;
+      // Use 10.14 format for Full Speed USB compatibility (macOS)
+      // TinyUSB's format correction will handle conversion for different OSes
+      uint32_t min_feedback = (current_sample_rate / 1000 - 1) << 14;
+      uint32_t max_feedback = (current_sample_rate / 1000 + 1) << 14;
+      uint32_t feedback_range = 2 << 14;
 
       // remap max-min target to min-max feedback
       int32_t feedback = I2S_TARGET_LEVEL_MAX_US - avg_length_us;

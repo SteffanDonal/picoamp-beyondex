@@ -188,7 +188,7 @@ static void __not_in_flash_func(eq_process)(uint8_t* buffer, int sample, uint8_t
             current_vol_l = (mute_l ? 0 : vol_mul_l);
         if (current_vol_r - VOL_STEP > (mute_r ? 0 : vol_mul_r))
             current_vol_r -= VOL_STEP;
-        else if (current_vol_l < (mute_r ? 0 : vol_mul_r) - VOL_STEP)
+        else if (current_vol_r < (mute_r ? 0 : vol_mul_r) - VOL_STEP)
             current_vol_r += VOL_STEP;
         else
             current_vol_r = (mute_r ? 0 : vol_mul_r);

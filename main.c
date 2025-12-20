@@ -455,9 +455,15 @@ void audio_task(void)
     //1ms間隔でフィードバック
     static uint32_t start_ms = 0;
     uint32_t curr_ms = board_millis();
-    if (curr_ms > start_ms)
+    if (curr_ms - start_ms >= 1)
     {
       int32_t length_us = i2s_get_buf_us();
+      static int32_t avg_length_us = 0;
+
+      if (avg_length_us == 0) avg_length_us = length_us;
+      
+      // Low pass filter to smooth out jitter from USB packet arrival timing
+      avg_length_us = (avg_length_us * 63 + length_us) >> 6; 
 
       //Windowsの許容するフィードバック量
       uint32_t min_feedback = (current_sample_rate / 1000 - 1) << 16;
@@ -465,7 +471,7 @@ void audio_task(void)
       uint32_t feedback_range = 2 << 16;
 
       // remap max-min target to min-max feedback
-      int32_t feedback = I2S_TARGET_LEVEL_MAX_US - length_us;
+      int32_t feedback = I2S_TARGET_LEVEL_MAX_US - avg_length_us;
       feedback *= feedback_range;
       feedback /= (I2S_TARGET_LEVEL_MAX_US - I2S_TARGET_LEVEL_MIN_US);
       feedback += min_feedback;
@@ -476,7 +482,7 @@ void audio_task(void)
         feedback = max_feedback;
 
       tud_audio_fb_set(feedback);
-      start_ms = curr_ms;
+      start_ms += 1;
     }
 
     spk_data_size = 0;

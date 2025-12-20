@@ -1,3 +1,3 @@
 [submodule "lib/pico-i2s-pio"]
 	path = lib/pico-i2s-pio
-	url = https://github.com/BambooMaster/pico-i2s-pio.git
+	url = https://github.com/FluidXR/pico-i2s-pio.git

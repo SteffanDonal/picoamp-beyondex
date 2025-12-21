@@ -37,6 +37,7 @@
 #include <string.h>
 
 #include "pico/stdlib.h"
+#include "pico/bootrom.h"
 #include "hardware/clocks.h"
 #include "hardware/dma.h"
 
@@ -111,6 +112,15 @@ uint8_t current_resolution;
 void led_blinking_task(void);
 void audio_task(void);
 void bootsel_task(void);
+
+static void reboot_to_bootsel(void);
+
+// Vendor control request: reboot into BOOTSEL (ROM USB boot)
+// bmRequestType: 0x40 (Host-to-device | Vendor | Device)
+#define BEYONDEX_USB_REQ_BOOTSEL   0x42
+#define BEYONDEX_USB_BOOTSEL_MAGIC 0xB007
+
+static volatile uint8_t g_bootsel_reboot_countdown = 0;
 
 /*------------- MAIN -------------*/
 int main(void)
@@ -527,36 +537,75 @@ void led_blinking_task(void)
   led_state = 1 - led_state;
 }
 
+// Invoked when received a control request with VENDOR type.
+// This works even when CFG_TUD_VENDOR=0 (TinyUSB uses this as a fallback handler
+// for vendor-type requests not claimed by any class driver).
+bool tud_vendor_control_xfer_cb(uint8_t rhport, uint8_t stage, tusb_control_request_t const *request)
+{
+  // Only need to act on SETUP stage
+  if (stage != CONTROL_STAGE_SETUP) return true;
+
+  // Handle a vendor request addressed to the device
+  if (request->bmRequestType_bit.type == TUSB_REQ_TYPE_VENDOR &&
+      request->bmRequestType_bit.recipient == TUSB_REQ_RCPT_DEVICE &&
+      request->bRequest == BEYONDEX_USB_REQ_BOOTSEL &&
+      request->wValue == BEYONDEX_USB_BOOTSEL_MAGIC &&
+      request->wLength == 0)
+  {
+    // Acknowledge the request first, then reboot.
+    // (Reboot is queued via bootsel_task() to avoid disrupting the control transfer.)
+    g_bootsel_reboot_countdown = 2;
+
+    bool const ok = tud_control_status(rhport, request);
+    return ok;
+  }
+
+  // Stall unsupported vendor requests
+  return false;
+}
+
 //--------------------------------------------------------------------+
 // BOOTSEL TASK
 //--------------------------------------------------------------------+
 
-// https://github.com/jasongaunt/rp2040-bootsel-reboot-example/
-#include "hardware/watchdog.h"
-
-bool timer_interrupt(__unused struct repeating_timer *t)
-{
-    return true;
-}
-
-bool watchdog_enabled = false;
-struct repeating_timer timer;
-
 void bootsel_task(void)
 {
-    if (!watchdog_enabled)
+  // Software-triggered BOOTSEL (USB vendor request)
+  if (g_bootsel_reboot_countdown)
+  {
+    g_bootsel_reboot_countdown--;
+    if (g_bootsel_reboot_countdown == 0)
     {
-        watchdog_enable(500, 1); // enable watchdog now
-        watchdog_enabled = true;
+      reboot_to_bootsel();
     }
-    add_repeating_timer_ms(400, timer_interrupt, NULL, &timer);
-    // NOTE: __wfi() can starve time-sensitive foreground work (USB audio pipeline),
-    // leading to DMA service jitter and audible artifacts.
-    // __wfi();
-    watchdog_update();
-    cancel_repeating_timer(&timer); // reset timer if something already interrupted in time
-    // TODO: this is causing issues if the device is connected but no audio streaming to it, which is nice in some instances but very bad in others
-    // maybe find another way
-    if (board_button_read())
-        while(1); // time out the watchdog
+  }
+
+  // Hardware fallback: hold BOOTSEL/USER button for ~1.5s to enter BOOTSEL
+  static uint32_t pressed_since_ms = 0;
+  bool const pressed = board_button_read();
+  if (pressed)
+  {
+    if (pressed_since_ms == 0)
+    {
+      pressed_since_ms = board_millis();
+    }
+    else if ((board_millis() - pressed_since_ms) > 1500)
+    {
+      reboot_to_bootsel();
+    }
+  }
+  else
+  {
+    pressed_since_ms = 0;
+  }
+}
+
+static void reboot_to_bootsel(void)
+{
+  // reset_usb_boot() is a ROM function (noreturn) that jumps directly into the USB bootloader.
+  // Arguments:
+  // - gpio_pin_mask: which GPIOs to monitor for USB activity (0 = default behaviour)
+  // - disable_interface_mask: which boot interfaces to disable (0 = none)
+  reset_usb_boot(0u, 0u);
+  while (1) { tight_loop_contents(); }
 }

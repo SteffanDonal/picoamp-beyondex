@@ -145,6 +145,13 @@ int main(void)
   {
     tud_task(); // TinyUSB device task
     audio_task();
+    // USB Audio feedback already regulates the host send rate. Running an
+    // additional device-side clock trim loop can create slow oscillations
+    // (periodic pops/fuzz). Keep disabled by default.
+#if I2S_ENABLE_CLOCK_TRIM
+    // Compute-only clock trim (divider is applied safely in the DMA IRQ handler)
+    i2s_clock_trim();
+#endif
     led_blinking_task();
     bootsel_task();
   }
@@ -529,7 +536,9 @@ void bootsel_task(void)
         watchdog_enabled = true;
     }
     add_repeating_timer_ms(400, timer_interrupt, NULL, &timer);
-    __wfi(); // if there are no irq, watchdog will also time out (ex. usb stopped receiving data or something?)
+    // NOTE: __wfi() can starve time-sensitive foreground work (USB audio pipeline),
+    // leading to DMA service jitter and audible artifacts.
+    // __wfi();
     watchdog_update();
     cancel_repeating_timer(&timer); // reset timer if something already interrupted in time
     // TODO: this is causing issues if the device is connected but no audio streaming to it, which is nice in some instances but very bad in others

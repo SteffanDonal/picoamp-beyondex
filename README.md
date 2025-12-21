@@ -96,34 +96,20 @@ Build outputs (in `build/`) include:
 
 If you don’t have Ninja installed, omit `-G Ninja` and CMake will typically fall back to Unix Makefiles.
 
-### Flash
+### Flashin the firmware
 
-#### UF2 (recommended)
+#### UF2
 
 1. Hold **BOOTSEL** while plugging in the Pico (it mounts as a USB mass storage drive).
 2. Copy `build/beyondex_usb_speaker.uf2` to the mounted drive.
 
-#### Software BOOTSEL reboot (no button)
 
-This firmware supports a **vendor USB control request** that reboots the RP2040 directly into the ROM USB bootloader (BOOTSEL).
 
 #### Software BOOTSEL reboot (web-based / WebUSB) — recommended
 
-The easiest “no-button” flow is a **hosted WebUSB page** (Chrome/Edge on desktop) that sends the BOOTSEL reboot request over USB.
+The easiest “no-button” flow is to use the [Beyondex Firmware Update Tool](https://updatebeyondex.fluid.so) (requires Chrome/Edge on desktop) that sends the BOOTSEL reboot request over WebUSB. Note this only works with firmware build from this repo, not other repos such as Sctanf/picoamp or Sctanf/picoamp-2
 
-- **Deploy** the separate WebUSB Updater repo to Vercel (static site)
-- **Point a subdomain** at it (e.g. `https://firmware.yourdomain.com`)
-- Users open the page and click **Connect device** → **Enter Update Mode**
 
-The page also includes a **Download latest firmware (.uf2)** button that links to the latest tagged GitHub release asset.
-
-#### picotool (optional)
-
-If you have `picotool` installed:
-
-```bash
-picotool load -f build/beyondex_usb_speaker.uf2
-```
 
 ### Tuning / DSP
 

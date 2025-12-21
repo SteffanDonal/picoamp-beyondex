@@ -96,46 +96,65 @@ uint64_t bass_step_time = 0;
 static void __not_in_flash_func(eq_process)(uint8_t* buffer, int sample, uint8_t resolution) {
     uint64_t now_time = time_us_64();
 
-    int16_t count;
+    // NOTE: Internal DSP buffers are sized for max 96 stereo frames (192 samples).
+    // Some hosts/stack paths can occasionally deliver larger OUT packets.
+    // Process in chunks to avoid overruns (which can manifest as periodic pops).
+    const int16_t MAX_FRAMES = 96;
+    int bytes_per_frame = 0;
+    switch (resolution) {
+    case 32: bytes_per_frame = 8; break; // 2ch * 4 bytes
+    case 24: bytes_per_frame = 6; break; // 2ch * 3 bytes
+    case 16: bytes_per_frame = 4; break; // 2ch * 2 bytes
+    default: bytes_per_frame = 0; break;
+    }
+    if (bytes_per_frame == 0 || sample <= 0) return;
 
 #ifdef PASSTHRU_ENABLE
 #define HEADROOM 0
 #else
 #define HEADROOM 1
 #endif
-    switch (resolution)
-    {
-    case 32: // 32bit
-        count = sample / 8;
+    uint8_t *in_ptr = buffer;
+    int bytes_left = sample;
+    while (bytes_left >= bytes_per_frame) {
+        int chunk_bytes = bytes_left;
+        int max_chunk_bytes = MAX_FRAMES * bytes_per_frame;
+        if (chunk_bytes > max_chunk_bytes) chunk_bytes = max_chunk_bytes;
+        // Ensure we only process whole frames
+        chunk_bytes -= (chunk_bytes % bytes_per_frame);
+        int16_t count = (int16_t)(chunk_bytes / bytes_per_frame);
+        if (count <= 0) break;
+
+        // Convert input chunk to internal fixed-point stereo sample buffer buf0[]
+        switch (resolution)
         {
-            int32_t *in = (int32_t *) buffer;
-            for (int i = 0; i < count * 2; i++)
-                buf0[i] = in[i] >> HEADROOM; // divide by 2, allow some headroom in case the filters need it
-        }
-        break;
-    case 24: // 24bit
-        count = sample / 6;
-        {
-            uint8_t *in = (uint8_t *) buffer;
-            for (int i = 0; i < count * 2; i += 2) {
-                int j = i * 3;
-                buf0[i] = (in[j] << 8 | in[j+1] << 16 | (int8_t)in[j+2] << 24) >> HEADROOM; // divide by 2, allow some headroom in case the filters need it
-                buf0[i+1] = (in[j+3] << 8 | in[j+4] << 16 | (int8_t)in[j+5] << 24) >> HEADROOM; // divide by 2, allow some headroom in case the filters need it
+        case 32: // 32bit
+            {
+                int32_t *in = (int32_t *) in_ptr;
+                for (int i = 0; i < count * 2; i++)
+                    buf0[i] = in[i] >> HEADROOM; // headroom for filters
             }
+            break;
+        case 24: // 24bit packed
+            {
+                uint8_t *in = (uint8_t *) in_ptr;
+                for (int i = 0; i < count * 2; i += 2) {
+                    int j = i * 3;
+                    buf0[i]   = (in[j]   << 8 | in[j+1] << 16 | (int8_t)in[j+2] << 24) >> HEADROOM;
+                    buf0[i+1] = (in[j+3] << 8 | in[j+4] << 16 | (int8_t)in[j+5] << 24) >> HEADROOM;
+                }
+            }
+            break;
+        case 16: // 16bit
+            {
+                int16_t *in = (int16_t *) in_ptr;
+                for (int i = 0; i < count * 2; i++)
+                    buf0[i] = (in[i] << 16) >> HEADROOM;
+            }
+            break;
+        default:
+            return;
         }
-        break;
-    case 16: // 16bit
-        count = sample / 4;
-        {
-            int16_t *in = (int16_t *) buffer;
-            for (int i = 0; i < count * 2; i++)
-                buf0[i] = (in[i] << 16) >> HEADROOM; // divide by 2, allow some headroom in case the filters need it
-        }
-        break;
-    default:
-        count = 0;
-        break;
-    }
 
     // main filters
 #ifdef EQ_ENABLE
@@ -279,6 +298,11 @@ static void __not_in_flash_func(eq_process)(uint8_t* buffer, int sample, uint8_t
     // output to i2s
     if (current_vol_l != 0 || current_vol_r != 0)
         i2s_enqueue((uint8_t *)out_buf, count * 8, 32);
+
+        // Advance to next chunk
+        in_ptr += chunk_bytes;
+        bytes_left -= chunk_bytes;
+    }
 }
 
 #endif

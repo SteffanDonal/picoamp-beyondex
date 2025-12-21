@@ -40,6 +40,7 @@
 #include "pico/bootrom.h"
 #include "hardware/clocks.h"
 #include "hardware/dma.h"
+#include "hardware/uart.h"
 
 #include "bsp/board_api.h"
 #include "tusb.h"
@@ -115,10 +116,95 @@ void bootsel_task(void);
 
 static void reboot_to_bootsel(void);
 
+//-----------------------------------------------------------------------------
+// Optional debug UART (does not use stdio; safe for USB audio timing).
+//
+// Connect a USB-UART dongle:
+// - Pico GP0 (UART0 TX) -> dongle RX
+// - Pico GND -> dongle GND
+// 115200 8N1
+//-----------------------------------------------------------------------------
+#ifndef BEYONDEX_DEBUG_UART
+#define BEYONDEX_DEBUG_UART 0
+#endif
+
+#if BEYONDEX_DEBUG_UART
+#define DBG_UART_ID uart0
+#define DBG_UART_BAUD 115200
+#define DBG_UART_TX_PIN 0
+#define DBG_UART_RX_PIN 1
+
+static inline void dbg_uart_puts(const char *s) {
+  while (*s) uart_putc_raw(DBG_UART_ID, *s++);
+}
+
+static void dbg_uart_put_u32(uint32_t v) {
+  char buf[11];
+  int i = 0;
+  if (v == 0) {
+    uart_putc_raw(DBG_UART_ID, '0');
+    return;
+  }
+  while (v && i < (int)sizeof(buf)) {
+    buf[i++] = (char)('0' + (v % 10));
+    v /= 10;
+  }
+  while (i--) uart_putc_raw(DBG_UART_ID, buf[i]);
+}
+
+static void dbg_uart_put_i32(int32_t v) {
+  if (v < 0) {
+    uart_putc_raw(DBG_UART_ID, '-');
+    // careful with INT32_MIN
+    uint32_t uv = (uint32_t)(-(v + 1)) + 1u;
+    dbg_uart_put_u32(uv);
+  } else {
+    dbg_uart_put_u32((uint32_t)v);
+  }
+}
+
+static void debug_uart_init(void) {
+  uart_init(DBG_UART_ID, DBG_UART_BAUD);
+  gpio_set_function(DBG_UART_TX_PIN, GPIO_FUNC_UART);
+  gpio_set_function(DBG_UART_RX_PIN, GPIO_FUNC_UART);
+  uart_set_format(DBG_UART_ID, 8, 1, UART_PARITY_NONE);
+  uart_set_fifo_enabled(DBG_UART_ID, false);
+}
+
+static void debug_uart_task(void) {
+  static uint32_t last_ms = 0;
+  uint32_t now = board_millis();
+  if (now - last_ms < 1000) return;
+  last_ms += 1000;
+
+  dbg_uart_puts("buf_len=");
+  dbg_uart_put_i32(i2s_get_buf_length());
+  dbg_uart_puts(" buf_us=");
+  dbg_uart_put_i32(i2s_get_buf_us());
+  dbg_uart_puts(" underrun=");
+  dbg_uart_put_u32(i2s_dbg_get_underrun_count());
+  dbg_uart_puts(" overflow=");
+  dbg_uart_put_u32(i2s_dbg_get_overflow_count());
+  dbg_uart_puts("\r\n");
+}
+#endif
+
 // Vendor control request: reboot into BOOTSEL (ROM USB boot)
 // bmRequestType: 0x40 (Host-to-device | Vendor | Device)
 #define BEYONDEX_USB_REQ_BOOTSEL   0x42
 #define BEYONDEX_USB_BOOTSEL_MAGIC 0xB007
+
+// Vendor control request: read audio debug stats
+// bmRequestType: 0xC0 (Device-to-host | Vendor | Device)
+#define BEYONDEX_USB_REQ_AUDIO_DIAG 0x43
+
+typedef struct __attribute__((packed)) {
+  uint32_t magic;     // 'BEXD' = 0x44584542
+  uint32_t underrun;  // i2s_dbg_get_underrun_count()
+  uint32_t overflow;  // i2s_dbg_get_overflow_count()
+  int32_t  buf_len;   // i2s_get_buf_length()
+  int32_t  buf_us;    // i2s_get_buf_us()
+} beyondex_audio_diag_t;
 
 static volatile uint8_t g_bootsel_reboot_countdown = 0;
 
@@ -132,6 +218,10 @@ int main(void)
   //i2s init
   i2s_mclk_set_pin(18, 16, 22);
   i2s_mclk_init(current_sample_rate);
+
+#if BEYONDEX_DEBUG_UART
+  debug_uart_init();
+#endif
 
   // init device stack on configured roothub port
   tud_init(BOARD_TUD_RHPORT);
@@ -164,6 +254,9 @@ int main(void)
 #endif
     led_blinking_task();
     bootsel_task();
+#if BEYONDEX_DEBUG_UART
+    debug_uart_task();
+#endif
   }
 }
 
@@ -496,11 +589,17 @@ void audio_task(void)
       // Low pass filter to smooth out jitter from USB packet arrival timing
       avg_length_us = (avg_length_us * 63 + length_us) >> 6; 
 
-      // Use 10.14 format for Full Speed USB compatibility (macOS)
-      // TinyUSB's format correction will handle conversion for different OSes
-      uint32_t min_feedback = (current_sample_rate / 1000 - 1) << 14;
-      uint32_t max_feedback = (current_sample_rate / 1000 + 1) << 14;
-      uint32_t feedback_range = 2 << 14;
+      // IMPORTANT: TinyUSB expects feedback in 16.16 when
+      // CFG_TUD_AUDIO_ENABLE_FEEDBACK_FORMAT_CORRECTION=1 (it converts to 10.14 on FS).
+      // See tinyusb `tud_audio_n_fb_set()` docs in `audio_device.h`.
+      //
+      // Keep feedback within UAC2 FMT-2.0 section 2.3.1.1 limits:
+      // deviation from nominal packet size must not exceed +/- one audio slot.
+      // In practice, sending out-of-range feedback can cause some hosts to
+      // ignore feedback and revert to nominal pacing (leading to slow drift).
+      uint32_t min_feedback = (current_sample_rate / 1000 - 1) << 16;
+      uint32_t max_feedback = (current_sample_rate / 1000 + 1) << 16;
+      uint32_t feedback_range = 2 << 16;
 
       // remap max-min target to min-max feedback
       int32_t feedback = I2S_TARGET_LEVEL_MAX_US - avg_length_us;
@@ -558,6 +657,23 @@ bool tud_vendor_control_xfer_cb(uint8_t rhport, uint8_t stage, tusb_control_requ
 
     bool const ok = tud_control_status(rhport, request);
     return ok;
+  }
+
+  // Read debug counters over USB control transfer (no UART/LED required)
+  if (request->bmRequestType_bit.type == TUSB_REQ_TYPE_VENDOR &&
+      request->bmRequestType_bit.recipient == TUSB_REQ_RCPT_DEVICE &&
+      request->bmRequestType_bit.direction == TUSB_DIR_IN &&
+      request->bRequest == BEYONDEX_USB_REQ_AUDIO_DIAG &&
+      request->wLength == sizeof(beyondex_audio_diag_t))
+  {
+    static beyondex_audio_diag_t diag;
+    diag.magic = 0x44584542u; // 'BEXD'
+    diag.underrun = i2s_dbg_get_underrun_count();
+    diag.overflow = i2s_dbg_get_overflow_count();
+    diag.buf_len  = i2s_get_buf_length();
+    diag.buf_us   = i2s_get_buf_us();
+
+    return tud_control_xfer(rhport, request, &diag, sizeof(diag));
   }
 
   // Stall unsupported vendor requests

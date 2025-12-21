@@ -311,7 +311,14 @@ static bool tud_audio_feature_unit_set_request(uint8_t rhport, audio_control_req
 
     mute[request->bChannelNumber] = ((audio_control_cur_1_t const *)buf)->bCur;
 
-    if (request->bChannelNumber == 1)
+    // macOS typically uses master channel 0; apply to both channels.
+    if (request->bChannelNumber == 0)
+    {
+      mute[1] = mute[0];
+      mute[2] = mute[0];
+      audio_set_mute(mute[0], 0);
+    }
+    else if (request->bChannelNumber == 1)
     {
       audio_set_mute(mute[1], 1);
     }
@@ -331,8 +338,15 @@ static bool tud_audio_feature_unit_set_request(uint8_t rhport, audio_control_req
     volume[request->bChannelNumber] = ((audio_control_cur_2_t const *)buf)->bCur;
 
     //音量変更
-    //Windowsはチャンネル0は使っていないっぽい
-    if (request->bChannelNumber == 1)
+    // macOS typically uses master channel 0; apply to both channels.
+    if (request->bChannelNumber == 0)
+    {
+      volume[1] = volume[0];
+      volume[2] = volume[0];
+      audio_set_volume(volume[0], 0);
+    }
+    // Windows often uses channels 1/2 directly.
+    else if (request->bChannelNumber == 1)
     {
       audio_set_volume(volume[1], 1);
     }

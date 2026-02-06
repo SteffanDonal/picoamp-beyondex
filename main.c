@@ -208,6 +208,16 @@ typedef struct __attribute__((packed)) {
 
 static volatile uint8_t g_bootsel_reboot_countdown = 0;
 
+// WebUSB landing page URL descriptor
+#define WEBUSB_URL  "updatebeyondex.fluid.so"
+
+static const tusb_desc_webusb_url_t desc_url = {
+  .bLength         = 3 + sizeof(WEBUSB_URL) - 1,
+  .bDescriptorType = 3, // WEBUSB URL type
+  .bScheme         = 1, // 0: http, 1: https
+  .url             = WEBUSB_URL
+};
+
 /*------------- MAIN -------------*/
 int main(void)
 {
@@ -637,46 +647,59 @@ void led_blinking_task(void)
 }
 
 // Invoked when received a control request with VENDOR type.
-// This works even when CFG_TUD_VENDOR=0 (TinyUSB uses this as a fallback handler
-// for vendor-type requests not claimed by any class driver).
 bool tud_vendor_control_xfer_cb(uint8_t rhport, uint8_t stage, tusb_control_request_t const *request)
 {
-  // Only need to act on SETUP stage
   if (stage != CONTROL_STAGE_SETUP) return true;
 
-  // Handle a vendor request addressed to the device
-  if (request->bmRequestType_bit.type == TUSB_REQ_TYPE_VENDOR &&
-      request->bmRequestType_bit.recipient == TUSB_REQ_RCPT_DEVICE &&
-      request->bRequest == BEYONDEX_USB_REQ_BOOTSEL &&
-      request->wValue == BEYONDEX_USB_BOOTSEL_MAGIC &&
-      request->wLength == 0)
-  {
-    // Acknowledge the request first, then reboot.
-    // (Reboot is queued via bootsel_task() to avoid disrupting the control transfer.)
-    g_bootsel_reboot_countdown = 2;
+  if (request->bmRequestType_bit.type != TUSB_REQ_TYPE_VENDOR) return false;
 
-    bool const ok = tud_control_status(rhport, request);
-    return ok;
+  switch (request->bRequest)
+  {
+    // ---- WebUSB landing page URL ----
+    case VENDOR_REQUEST_WEBUSB:
+      return tud_control_xfer(rhport, request, (void *)(uintptr_t)&desc_url, desc_url.bLength);
+
+    // ---- MS OS 2.0 descriptor set (auto-installs WinUSB on Windows) ----
+    case VENDOR_REQUEST_MICROSOFT:
+      if (request->wIndex == 7)
+      {
+        uint16_t total_len;
+        memcpy(&total_len, desc_ms_os_20 + 8, 2);
+        return tud_control_xfer(rhport, request, (void *)(uintptr_t)desc_ms_os_20, total_len);
+      }
+      return false;
+
+    // ---- Reboot into BOOTSEL (firmware update) ----
+    case BEYONDEX_USB_REQ_BOOTSEL:
+      if (request->bmRequestType_bit.recipient == TUSB_REQ_RCPT_DEVICE &&
+          request->wValue == BEYONDEX_USB_BOOTSEL_MAGIC &&
+          request->wLength == 0)
+      {
+        g_bootsel_reboot_countdown = 2;
+        return tud_control_status(rhport, request);
+      }
+      return false;
+
+    // ---- Audio diagnostics ----
+    case BEYONDEX_USB_REQ_AUDIO_DIAG:
+      if (request->bmRequestType_bit.recipient == TUSB_REQ_RCPT_DEVICE &&
+          request->bmRequestType_bit.direction == TUSB_DIR_IN &&
+          request->wLength == sizeof(beyondex_audio_diag_t))
+      {
+        static beyondex_audio_diag_t diag;
+        diag.magic    = 0x44584542u; // 'BEXD'
+        diag.underrun = i2s_dbg_get_underrun_count();
+        diag.overflow = i2s_dbg_get_overflow_count();
+        diag.buf_len  = i2s_get_buf_length();
+        diag.buf_us   = i2s_get_buf_us();
+        return tud_control_xfer(rhport, request, &diag, sizeof(diag));
+      }
+      return false;
+
+    default:
+      break;
   }
 
-  // Read debug counters over USB control transfer (no UART/LED required)
-  if (request->bmRequestType_bit.type == TUSB_REQ_TYPE_VENDOR &&
-      request->bmRequestType_bit.recipient == TUSB_REQ_RCPT_DEVICE &&
-      request->bmRequestType_bit.direction == TUSB_DIR_IN &&
-      request->bRequest == BEYONDEX_USB_REQ_AUDIO_DIAG &&
-      request->wLength == sizeof(beyondex_audio_diag_t))
-  {
-    static beyondex_audio_diag_t diag;
-    diag.magic = 0x44584542u; // 'BEXD'
-    diag.underrun = i2s_dbg_get_underrun_count();
-    diag.overflow = i2s_dbg_get_overflow_count();
-    diag.buf_len  = i2s_get_buf_length();
-    diag.buf_us   = i2s_get_buf_us();
-
-    return tud_control_xfer(rhport, request, &diag, sizeof(diag));
-  }
-
-  // Stall unsupported vendor requests
   return false;
 }
 

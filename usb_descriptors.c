@@ -55,7 +55,7 @@ tusb_desc_device_t const desc_device =
 {
     .bLength            = sizeof(tusb_desc_device_t),
     .bDescriptorType    = TUSB_DESC_DEVICE,
-    .bcdUSB             = 0x0200,
+    .bcdUSB             = 0x0210, // at least 2.1 for BOS & WebUSB
 
     // Use Interface Association Descriptor (IAD) for Audio
     // As required by USB Specs IAD's subclass must be common class (2) and protocol must be IAD (1)
@@ -85,7 +85,7 @@ uint8_t const * tud_descriptor_device_cb(void)
 //--------------------------------------------------------------------+
 // Configuration Descriptor
 //--------------------------------------------------------------------+
-#define CONFIG_TOTAL_LEN    	(TUD_CONFIG_DESC_LEN + CFG_TUD_AUDIO * TUD_AUDIO_HEADSET_STEREO_DESC_LEN)
+#define CONFIG_TOTAL_LEN    	(TUD_CONFIG_DESC_LEN + CFG_TUD_AUDIO * TUD_AUDIO_HEADSET_STEREO_DESC_LEN + TUD_VENDOR_DESC_LEN)
 
 #if CFG_TUSB_MCU == OPT_MCU_LPC175X_6X || CFG_TUSB_MCU == OPT_MCU_LPC177X_8X || CFG_TUSB_MCU == OPT_MCU_LPC40XX
   // LPC 17xx and 40xx endpoint type (bulk/interrupt/iso) are fixed by its number
@@ -113,6 +113,9 @@ uint8_t const * tud_descriptor_device_cb(void)
 #else
   #define EPNUM_AUDIO_FB    0x01
   #define EPNUM_AUDIO_OUT   0x01
+
+  #define EPNUM_VENDOR_OUT  0x02
+  #define EPNUM_VENDOR_IN   0x82
 #endif
 
 uint8_t const desc_configuration[] =
@@ -121,7 +124,10 @@ uint8_t const desc_configuration[] =
     TUD_CONFIG_DESCRIPTOR(1, ITF_NUM_TOTAL, 0, CONFIG_TOTAL_LEN, 0x00, 100),
 
     // stridx (4: Audio Interface), string index, EP Out & EP In address, EP size
-    TUD_AUDIO_HEADSET_STEREO_DESCRIPTOR(4, EPNUM_AUDIO_OUT, EPNUM_AUDIO_FB | 0x80, 4)
+    TUD_AUDIO_HEADSET_STEREO_DESCRIPTOR(4, EPNUM_AUDIO_OUT, EPNUM_AUDIO_FB | 0x80, 4),
+
+    // Vendor interface for WebUSB control transfers (WinUSB on Windows)
+    TUD_VENDOR_DESCRIPTOR(ITF_NUM_VENDOR, 0, EPNUM_VENDOR_OUT, EPNUM_VENDOR_IN, 64)
 };
 
 // Invoked when received GET CONFIGURATION DESCRIPTOR
@@ -132,6 +138,65 @@ uint8_t const * tud_descriptor_configuration_cb(uint8_t index)
   (void)index; // for multiple configurations
   return desc_configuration;
 }
+
+//--------------------------------------------------------------------+
+// BOS Descriptor  (required for WebUSB + MS OS 2.0 on Windows)
+//--------------------------------------------------------------------+
+
+#define BOS_TOTAL_LEN      (TUD_BOS_DESC_LEN + TUD_BOS_WEBUSB_DESC_LEN + TUD_BOS_MICROSOFT_OS_DESC_LEN)
+
+#define MS_OS_20_DESC_LEN  0xB2
+
+uint8_t const desc_bos[] =
+{
+  // total length, number of device caps
+  TUD_BOS_DESCRIPTOR(BOS_TOTAL_LEN, 2),
+
+  // Vendor Code, iLandingPage (0 = no Chrome notification)
+  TUD_BOS_WEBUSB_DESCRIPTOR(VENDOR_REQUEST_WEBUSB, 0),
+
+  // Microsoft OS 2.0 descriptor
+  TUD_BOS_MS_OS_20_DESCRIPTOR(MS_OS_20_DESC_LEN, VENDOR_REQUEST_MICROSOFT)
+};
+
+uint8_t const * tud_descriptor_bos_cb(void)
+{
+  return desc_bos;
+}
+
+//--------------------------------------------------------------------+
+// MS OS 2.0 Descriptor Set  (auto-installs WinUSB for vendor interface)
+//--------------------------------------------------------------------+
+
+uint8_t const desc_ms_os_20[] =
+{
+  // Set header: length, type, windows version, total length
+  U16_TO_U8S_LE(0x000A), U16_TO_U8S_LE(MS_OS_20_SET_HEADER_DESCRIPTOR), U32_TO_U8S_LE(0x06030000), U16_TO_U8S_LE(MS_OS_20_DESC_LEN),
+
+  // Configuration subset header: length, type, configuration index, reserved, configuration total length
+  U16_TO_U8S_LE(0x0008), U16_TO_U8S_LE(MS_OS_20_SUBSET_HEADER_CONFIGURATION), 0, 0, U16_TO_U8S_LE(MS_OS_20_DESC_LEN-0x0A),
+
+  // Function Subset header: length, type, first interface, reserved, subset length
+  U16_TO_U8S_LE(0x0008), U16_TO_U8S_LE(MS_OS_20_SUBSET_HEADER_FUNCTION), ITF_NUM_VENDOR, 0, U16_TO_U8S_LE(MS_OS_20_DESC_LEN-0x0A-0x08),
+
+  // MS OS 2.0 Compatible ID descriptor: length, type, compatible ID, sub compatible ID
+  U16_TO_U8S_LE(0x0014), U16_TO_U8S_LE(MS_OS_20_FEATURE_COMPATBLE_ID), 'W', 'I', 'N', 'U', 'S', 'B', 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // sub-compatible
+
+  // MS OS 2.0 Registry property descriptor: length, type
+  U16_TO_U8S_LE(MS_OS_20_DESC_LEN-0x0A-0x08-0x08-0x14), U16_TO_U8S_LE(MS_OS_20_FEATURE_REG_PROPERTY),
+  U16_TO_U8S_LE(0x0007), U16_TO_U8S_LE(0x002A), // wPropertyDataType, wPropertyNameLength and PropertyName "DeviceInterfaceGUIDs\0" in UTF-16
+  'D', 0x00, 'e', 0x00, 'v', 0x00, 'i', 0x00, 'c', 0x00, 'e', 0x00, 'I', 0x00, 'n', 0x00, 't', 0x00, 'e', 0x00,
+  'r', 0x00, 'f', 0x00, 'a', 0x00, 'c', 0x00, 'e', 0x00, 'G', 0x00, 'U', 0x00, 'I', 0x00, 'D', 0x00, 's', 0x00, 0x00, 0x00,
+  U16_TO_U8S_LE(0x0050), // wPropertyDataLength
+  // bPropertyData: "{975F44D9-0D08-43FD-8B3E-127CA8AFAD9D}"
+  '{', 0x00, '9', 0x00, '7', 0x00, '5', 0x00, 'F', 0x00, '4', 0x00, '4', 0x00, 'D', 0x00, '9', 0x00, '-', 0x00,
+  '0', 0x00, 'D', 0x00, '0', 0x00, '8', 0x00, '-', 0x00, '4', 0x00, '3', 0x00, 'F', 0x00, 'D', 0x00, '-', 0x00,
+  '8', 0x00, 'B', 0x00, '3', 0x00, 'E', 0x00, '-', 0x00, '1', 0x00, '2', 0x00, '7', 0x00, 'C', 0x00, 'A', 0x00,
+  '8', 0x00, 'A', 0x00, 'F', 0x00, 'A', 0x00, 'D', 0x00, '9', 0x00, 'D', 0x00, '}', 0x00, 0x00, 0x00, 0x00, 0x00
+};
+
+TU_VERIFY_STATIC(sizeof(desc_ms_os_20) == MS_OS_20_DESC_LEN, "Incorrect size");
 
 //--------------------------------------------------------------------+
 // String Descriptors

@@ -28,6 +28,33 @@ set(PICO_BOARD pico CACHE STRING "Board type")
 # Pull in Raspberry Pi Pico SDK (must be before project)
 include(pico_sdk_import.cmake)
 
+# TinyUSB 0.18.0 (bundled with SDK 2.1.1) breaks USB Audio on Windows.
+# Pin to 0.17.0 until a fixed version is available.
+set(BEYONDEX_REQUIRED_TUSB_VERSION "0.17.0")
+if(EXISTS "${PICO_SDK_PATH}/lib/tinyusb/src/tusb_option.h")
+    file(STRINGS "${PICO_SDK_PATH}/lib/tinyusb/src/tusb_option.h" _tusb_ver_lines
+         REGEX "^#define TUSB_VERSION_(MAJOR|MINOR|REVISION)")
+    foreach(_line ${_tusb_ver_lines})
+        if(_line MATCHES "TUSB_VERSION_MAJOR[ \t]+([0-9]+)")
+            set(_tusb_major ${CMAKE_MATCH_1})
+        elseif(_line MATCHES "TUSB_VERSION_MINOR[ \t]+([0-9]+)")
+            set(_tusb_minor ${CMAKE_MATCH_1})
+        elseif(_line MATCHES "TUSB_VERSION_REVISION[ \t]+([0-9]+)")
+            set(_tusb_rev ${CMAKE_MATCH_1})
+        endif()
+    endforeach()
+    if(DEFINED _tusb_major)
+        set(_tusb_ver "${_tusb_major}.${_tusb_minor}.${_tusb_rev}")
+        if(NOT _tusb_ver VERSION_EQUAL ${BEYONDEX_REQUIRED_TUSB_VERSION})
+            message(FATAL_ERROR
+                "TinyUSB ${_tusb_ver} detected but ${BEYONDEX_REQUIRED_TUSB_VERSION} is required.\n"
+                "Run: git -C \"${PICO_SDK_PATH}/lib/tinyusb\" fetch --tags origin && "
+                "git -C \"${PICO_SDK_PATH}/lib/tinyusb\" checkout ${BEYONDEX_REQUIRED_TUSB_VERSION}")
+        endif()
+        message(STATUS "TinyUSB version: ${_tusb_ver} (OK)")
+    endif()
+endif()
+
 project(beyondex_usb_speaker C CXX ASM)
 
 # Initialise the Raspberry Pi Pico SDK

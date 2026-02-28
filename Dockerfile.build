@@ -1,0 +1,23 @@
+FROM ubuntu:24.04
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates build-essential cmake python3 git curl xz-utils ninja-build \
+  && rm -rf /var/lib/apt/lists/*
+
+RUN curl -L "https://developer.arm.com/-/media/Files/downloads/gnu/14.2.rel1/binrel/arm-gnu-toolchain-14.2.rel1-x86_64-arm-none-eabi.tar.xz" \
+      -o /tmp/arm-gcc.tar.xz && \
+    tar -xf /tmp/arm-gcc.tar.xz -C /opt && \
+    rm /tmp/arm-gcc.tar.xz
+
+ENV PATH="/opt/arm-gnu-toolchain-14.2.rel1-x86_64-arm-none-eabi/bin:${PATH}"
+
+RUN git clone --branch 2.1.1 https://github.com/raspberrypi/pico-sdk.git /opt/pico-sdk && \
+    cd /opt/pico-sdk && git submodule update --init && \
+    cd /opt/pico-sdk/lib/tinyusb && git fetch --tags origin && git checkout 0.17.0
+
+ENV PICO_SDK_PATH=/opt/pico-sdk
+
+WORKDIR /src
+COPY . .
+RUN rm -rf build && cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release && \
+    cmake --build build -j$(nproc)

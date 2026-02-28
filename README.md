@@ -1,16 +1,16 @@
 # Picoamp Beyondex (RP2040) Firmware
 
-This repository is a **fork of Sctanf’s Picoamp-2 firmware**:
+This repository is a **fork of Sctanf's Picoamp-2 firmware**:
 
 - **Upstream**: [sctanf/picoamp-2](https://github.com/sctanf/picoamp-2)
 
-Sctanf’s project itself is forked from BambooMaster’s `pico_usb_i2s_speaker`.
+Sctanf's project itself is forked from BambooMaster's `pico_usb_i2s_speaker`.
 
 USB Audio (speaker) firmware for Raspberry Pi Pico / RP2040 that outputs **I2S with MCLK**, with a small built-in DSP stage (biquads / EQ).
 
 ### How this fork differs from `sctanf/picoamp-2`
 
-- **Branding / USB strings**: Rebranded device strings (e.g. “Beyondex HD Audio”) in `usb_descriptors.c` for use in [Project Beyondex](https://fluid.so/beyondex).
+- **Branding / USB strings**: Rebranded device strings (e.g. "Beyondex HD Audio") in `usb_descriptors.c` for use in [Project Beyondex](https://fluid.so/beyondex).
 - **I2S pin defaults**: This repo sets pins in `main.c` to:
   - LRCLK=GPIO16, BCLK=GPIO17, DATA=GPIO18, MCLK=GPIO22
 - **Boot / flash stability workaround**: Sets `PICO_FLASH_SPI_CLKDIV=4` for the boot stage to tolerate higher system clocks (see `CMakeLists.txt`).
@@ -94,7 +94,7 @@ Build outputs (in `build/`) include:
 - `beyondex_usb_speaker.elf`
 - `beyondex_usb_speaker.bin`
 
-If you don’t have Ninja installed, omit `-G Ninja` and CMake will typically fall back to Unix Makefiles.
+If you don't have Ninja installed, omit `-G Ninja` and CMake will typically fall back to Unix Makefiles.
 
 ### Flashin the firmware
 
@@ -107,7 +107,7 @@ If you don’t have Ninja installed, omit `-G Ninja` and CMake will typically fa
 
 #### Software BOOTSEL reboot (web-based / WebUSB) — recommended
 
-The easiest “no-button” flow is to use the [Beyondex Firmware Update Tool](https://updatebeyondex.fluid.so) (requires Chrome/Edge on desktop) that sends the BOOTSEL reboot request over WebUSB. Note this only works with firmware build from this repo, not other repos such as Sctanf/picoamp or Sctanf/picoamp-2
+The easiest "no-button" flow is to use the [Beyondex Firmware Update Tool](https://updatebeyondex.fluid.so) (requires Chrome/Edge on desktop) that sends the BOOTSEL reboot request over WebUSB. Note this only works with firmware build from this repo, not other repos such as Sctanf/picoamp or Sctanf/picoamp-2
 
 
 
@@ -115,8 +115,22 @@ The easiest “no-button” flow is to use the [Beyondex Firmware Update Tool](h
 
 Filter configuration lives in `dsp/` and can be generated with tools like Room EQ Wizard (REW). Start by looking at the EQ headers in `dsp/`.
 
+### TinyUSB version requirement
+
+This firmware requires **TinyUSB 0.17.0**. The Pico SDK 2.1.1 bundles TinyUSB 0.18.0 by default, which breaks USB Audio playback on Windows. The CMake build will error if the wrong version is detected.
+
+If you hit this error, fix it with:
+
+```bash
+git -C "$PICO_SDK_PATH/lib/tinyusb" fetch --tags origin
+git -C "$PICO_SDK_PATH/lib/tinyusb" checkout 0.17.0
+```
+
+The `Dockerfile.build` handles this automatically for containerized builds.
+
 ### Troubleshooting
 
-- **CMake can’t find the Pico SDK**: make sure `PICO_SDK_PATH` points to `.../pico-sdk` (absolute path recommended).
+- **CMake can't find the Pico SDK**: make sure `PICO_SDK_PATH` points to `.../pico-sdk` (absolute path recommended).
 - **Submodule content missing**: run `git submodule update --init --recursive`.
 - **No audio / wrong pins**: verify the pin mapping above matches your wiring, and adjust `i2s_mclk_set_pin(...)` in `main.c`.
+- **No audio on Windows (device shows up but no sound)**: check that TinyUSB is at 0.17.0 — see "TinyUSB version requirement" above.

@@ -156,6 +156,18 @@ static void __not_in_flash_func(eq_process)(uint8_t* buffer, int sample, uint8_t
             return;
         }
 
+    // Channel swap (L <-> R) when enabled via WebUSB settings
+    {
+        extern volatile uint8_t g_channel_swap;
+        if (g_channel_swap) {
+            for (int i = 0; i < count * 2; i += 2) {
+                dspfx tmp = buf0[i];
+                buf0[i] = buf0[i+1];
+                buf0[i+1] = tmp;
+            }
+        }
+    }
+
     // main filters
 #ifdef EQ_ENABLE
     process_biquad(&eq_bq_1, biquadconstsfx(EQ_I_0), count, buf0, buf1);

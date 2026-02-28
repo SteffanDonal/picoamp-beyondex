@@ -40,6 +40,8 @@
 #include "pico/bootrom.h"
 #include "hardware/clocks.h"
 #include "hardware/dma.h"
+#include "hardware/flash.h"
+#include "hardware/sync.h"
 #include "hardware/uart.h"
 
 #include "bsp/board_api.h"
@@ -206,6 +208,46 @@ typedef struct __attribute__((packed)) {
   int32_t  buf_us;    // i2s_get_buf_us()
 } beyondex_audio_diag_t;
 
+// Vendor control request: get/set channel swap
+#define BEYONDEX_USB_REQ_CHANNEL_SWAP 0x44
+
+//--------------------------------------------------------------------+
+// PERSISTENT SETTINGS (last sector of flash)
+//--------------------------------------------------------------------+
+#define SETTINGS_MAGIC 0x42455844u  // 'BEXD'
+#define SETTINGS_FLASH_OFFSET (PICO_FLASH_SIZE_BYTES - FLASH_SECTOR_SIZE)
+
+typedef struct __attribute__((packed)) {
+  uint32_t magic;
+  uint8_t  channel_swap;   // 0 = normal, 1 = L/R swapped
+  uint8_t  _reserved[251]; // pad to FLASH_PAGE_SIZE (256)
+} beyondex_settings_t;
+
+_Static_assert(sizeof(beyondex_settings_t) == FLASH_PAGE_SIZE,
+               "settings struct must be exactly one flash page");
+
+volatile uint8_t g_channel_swap = 0;
+
+static void settings_load(void) {
+  const beyondex_settings_t *s =
+      (const beyondex_settings_t *)(XIP_BASE + SETTINGS_FLASH_OFFSET);
+  if (s->magic == SETTINGS_MAGIC) {
+    g_channel_swap = s->channel_swap ? 1 : 0;
+  }
+}
+
+static void settings_save(void) {
+  beyondex_settings_t page;
+  memset(&page, 0xFF, sizeof(page));
+  page.magic        = SETTINGS_MAGIC;
+  page.channel_swap = g_channel_swap ? 1 : 0;
+
+  uint32_t ints = save_and_disable_interrupts();
+  flash_range_erase(SETTINGS_FLASH_OFFSET, FLASH_SECTOR_SIZE);
+  flash_range_program(SETTINGS_FLASH_OFFSET, (const uint8_t *)&page, FLASH_PAGE_SIZE);
+  restore_interrupts(ints);
+}
+
 static volatile uint8_t g_bootsel_reboot_countdown = 0;
 
 // WebUSB landing page URL descriptor
@@ -232,6 +274,8 @@ int main(void)
 #if BEYONDEX_DEBUG_UART
   debug_uart_init();
 #endif
+
+  settings_load();
 
   // init device stack on configured roothub port
   tud_init(BOARD_TUD_RHPORT);
@@ -677,6 +721,25 @@ bool tud_vendor_control_xfer_cb(uint8_t rhport, uint8_t stage, tusb_control_requ
       {
         g_bootsel_reboot_countdown = 2;
         return tud_control_status(rhport, request);
+      }
+      return false;
+
+    // ---- Channel swap (get / set, persisted to flash) ----
+    case BEYONDEX_USB_REQ_CHANNEL_SWAP:
+      if (request->bmRequestType_bit.recipient == TUSB_REQ_RCPT_DEVICE)
+      {
+        if (request->bmRequestType_bit.direction == TUSB_DIR_IN)
+        {
+          static uint8_t swap_val;
+          swap_val = g_channel_swap ? 1 : 0;
+          return tud_control_xfer(rhport, request, &swap_val, 1);
+        }
+        else
+        {
+          g_channel_swap = request->wValue ? 1 : 0;
+          settings_save();
+          return tud_control_status(rhport, request);
+        }
       }
       return false;
 

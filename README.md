@@ -14,7 +14,6 @@ USB Audio (speaker) firmware for Raspberry Pi Pico / RP2040 that outputs **I2S w
 - **I2S pin defaults**: This repo sets pins in `main.c` to:
   - LRCLK=GPIO16, BCLK=GPIO17, DATA=GPIO18, MCLK=GPIO22
 - **Boot / flash stability workaround**: Sets `PICO_FLASH_SPI_CLKDIV=4` for the boot stage to tolerate higher system clocks (see `CMakeLists.txt`).
-- **Control-loop stability defaults**: Device-side clock trimming is **disabled by default** (`I2S_ENABLE_CLOCK_TRIM=0`) because USB Audio feedback already regulates host send rate.
 - **Local I2S library fork**: Uses a repo-local `lib/pico-i2s-pio/` submodule that points at `FluidXR/pico-i2s-pio`.
 
 ### Features

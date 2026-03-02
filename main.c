@@ -205,6 +205,7 @@ int main(void)
 
   // init device stack on configured roothub port
   tud_init(BOARD_TUD_RHPORT);
+  tud_sof_cb_enable(true);
 
   if (board_init_after_tusb) {
     board_init_after_tusb();
@@ -225,13 +226,6 @@ int main(void)
   {
     tud_task(); // TinyUSB device task
     audio_task();
-    // USB Audio feedback already regulates the host send rate. Running an
-    // additional device-side clock trim loop can create slow oscillations
-    // (periodic pops/fuzz). Keep disabled by default.
-#if I2S_ENABLE_CLOCK_TRIM
-    // Compute-only clock trim (divider is applied safely in the DMA IRQ handler)
-    i2s_clock_trim();
-#endif
     led_blinking_task();
     bootsel_task();
 #if BEYONDEX_HID_DEBUG
@@ -248,6 +242,8 @@ int main(void)
 void tud_mount_cb(void)
 {
   blink_interval_ms = BLINK_MOUNTED;
+  tud_sof_cb_enable(false);
+  tud_sof_cb_enable(true);
 }
 
 // Invoked when device is unmounted
@@ -499,15 +495,104 @@ bool tud_audio_set_itf_close_EP_cb(uint8_t rhport, tusb_control_request_t const 
   return true;
 }
 
+static int32_t fb_avg_us = 0;
+static int32_t fb_i_us = 0;
+static int32_t fb_last_q16 = 0;
+
+static inline int32_t clamp_i32(int32_t v, int32_t lo, int32_t hi)
+{
+  return (v < lo) ? lo : (v > hi) ? hi
+                                  : v;
+}
+
+void tud_sof_cb(uint32_t frame_count)
+{
+  (void)frame_count;
+
+  sof_calls++;
+
+  // If stream not active, keep nominal and reset state.
+  if (!spk_streaming_active)
+  {
+    fb_avg_us = 0;
+    fb_i_us = 0;
+    fb_last_q16 = 0;
+    return;
+  }
+
+  const int32_t min_us = I2S_TARGET_LEVEL_MIN_US;
+  const int32_t max_us = I2S_TARGET_LEVEL_MAX_US;
+  const int32_t mid_us = (min_us + max_us) / 2;
+  const int32_t range_us = (max_us - min_us) > 1 ? (max_us - min_us) : 1;
+
+  int32_t us = i2s_get_buf_us();
+
+  // 1st-order IIR LPF to suppress packet jitter
+  if (fb_avg_us == 0)
+    fb_avg_us = us;
+  fb_avg_us = (fb_avg_us * 63 + us) >> 6;
+
+  // Positive == buffer below target == host must speed up (increase feedback)
+  int32_t err_us = (mid_us - fb_avg_us);
+
+  // Map full range_us error to +/- P_MAX_DELTA (in 16.16)
+  const int32_t P_MAX_DELTA_Q16 = (1 << 14);
+  int32_t p_q16 = (int32_t)(((int64_t)err_us * (int64_t)P_MAX_DELTA_Q16) / (int64_t)(range_us / 2));
+  p_q16 = clamp_i32(p_q16, -P_MAX_DELTA_Q16, P_MAX_DELTA_Q16);
+
+  // Integrate error (us per ms)
+  // I_LIM_US sets the max accumulated error; large enough to overcome host smoothing.
+  const int32_t I_LIM_US = 50000;
+  fb_i_us = clamp_i32(fb_i_us + err_us, -I_LIM_US, I_LIM_US);
+
+  // Convert integrated error to 16.16 delta with a small gain.
+  // SHIFT controls integral gain: smaller == stronger.
+  const int I_SHIFT = 18;
+  int32_t i_q16 = (fb_i_us << 16) >> I_SHIFT; // (us * 2^16) / 2^I_SHIFT
+  // Clamp integral contribution tighter than full-scale to prevent hunting
+  const int32_t I_MAX_DELTA_Q16 = (1 << 15); // 0.5 sample/ms
+  i_q16 = clamp_i32(i_q16, -I_MAX_DELTA_Q16, I_MAX_DELTA_Q16);
+
+  // Nominal 16.16 frames per ms
+  const uint32_t nominal_q16 = (uint32_t)((((uint64_t)current_sample_rate) << 16) + 500) / 1000;
+
+  const int32_t TOTAL_MAX_DELTA_Q16 = (1 << 16);
+  int32_t delta_q16 = clamp_i32(p_q16 + i_q16, -TOTAL_MAX_DELTA_Q16, TOTAL_MAX_DELTA_Q16);
+
+  int32_t fb_q16 = nominal_q16 + delta_q16;
+
+  int32_t min_fb_q16 = nominal_q16 - (1 << 16);
+  int32_t max_fb_q16 = nominal_q16 + (1 << 16);
+  fb_q16 = clamp_i32(fb_q16, min_fb_q16, max_fb_q16);
+
+  fb_last_q16 = fb_q16;
+  tud_audio_fb_set((uint32_t)fb_q16);
+  sof_updates++;
+
+  feedback = (uint32_t)fb_q16;
+}
+
+bool tud_audio_feedback_format_correction_cb(uint8_t func_id)
+{
+  (void)func_id;
+  return false;
+}
+
 bool tud_audio_set_itf_cb(uint8_t rhport, tusb_control_request_t const * p_request)
 {
   (void)rhport;
   uint8_t const itf = tu_u16_low(tu_le16toh(p_request->wIndex));
   uint8_t const alt = tu_u16_low(tu_le16toh(p_request->wValue));
 
+  spk_streaming_active = ITF_NUM_AUDIO_STREAMING_SPK == itf && alt != 0;
+
   TU_LOG2("Set interface %d alt %d\r\n", itf, alt);
-  if (ITF_NUM_AUDIO_STREAMING_SPK == itf && alt != 0)
-      blink_interval_ms = BLINK_STREAMING;
+  if (spk_streaming_active)
+  {
+    blink_interval_ms = BLINK_STREAMING;
+    uint32_t nominal_fb = (current_sample_rate / 1000) << 16; // 16.16
+    tud_audio_fb_set(nominal_fb);                             // prime feedback EP
+  }
 
   // Clear buffer when streaming format is changed
   spk_data_size = 0;
@@ -555,47 +640,6 @@ void audio_task(void)
   if (spk_data_size)
   {
     eq_process(spk_buf, spk_data_size, current_resolution);
-
-    //1ms間隔でフィードバック
-    static uint32_t start_ms = 0;
-    uint32_t curr_ms = board_millis();
-    if (curr_ms - start_ms >= 1)
-    {
-      int32_t length_us = i2s_get_buf_us();
-      static int32_t avg_length_us = 0;
-
-      if (avg_length_us == 0) avg_length_us = length_us;
-      
-      // Low pass filter to smooth out jitter from USB packet arrival timing
-      avg_length_us = (avg_length_us * 63 + length_us) >> 6; 
-
-      // IMPORTANT: TinyUSB expects feedback in 16.16 when
-      // CFG_TUD_AUDIO_ENABLE_FEEDBACK_FORMAT_CORRECTION=1 (it converts to 10.14 on FS).
-      // See tinyusb `tud_audio_n_fb_set()` docs in `audio_device.h`.
-      //
-      // Keep feedback within UAC2 FMT-2.0 section 2.3.1.1 limits:
-      // deviation from nominal packet size must not exceed +/- one audio slot.
-      // In practice, sending out-of-range feedback can cause some hosts to
-      // ignore feedback and revert to nominal pacing (leading to slow drift).
-      uint32_t min_feedback = (current_sample_rate / 1000 - 1) << 16;
-      uint32_t max_feedback = (current_sample_rate / 1000 + 1) << 16;
-      uint32_t feedback_range = 2 << 16;
-
-      // remap max-min target to min-max feedback
-      int32_t feedback = I2S_TARGET_LEVEL_MAX_US - avg_length_us;
-      feedback *= feedback_range;
-      feedback /= (I2S_TARGET_LEVEL_MAX_US - I2S_TARGET_LEVEL_MIN_US);
-      feedback += min_feedback;
-
-      if (feedback < min_feedback)
-        feedback = min_feedback;
-      else if (feedback > max_feedback)
-        feedback = max_feedback;
-
-      tud_audio_fb_set(feedback);
-      start_ms += 1;
-    }
-
     spk_data_size = 0;
   }
 }

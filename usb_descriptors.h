@@ -38,6 +38,8 @@
 
 #include <stdint.h>
 
+#define BEYONDEX_HID_DEBUG 0
+
 // Unit numbers are arbitrary selected
 #define UAC2_ENTITY_CLOCK               0x04
 // Speaker path
@@ -50,6 +52,9 @@ enum
   ITF_NUM_AUDIO_CONTROL = 0,
   ITF_NUM_AUDIO_STREAMING_SPK,
   ITF_NUM_VENDOR,
+#if BEYONDEX_HID_DEBUG
+  ITF_NUM_HID_DIAG,
+#endif
   ITF_NUM_TOTAL
 };
 
@@ -62,6 +67,14 @@ enum
 };
 
 extern uint8_t const desc_ms_os_20[];
+
+// 9-byte Standard Endpoint Descriptor variant (adds bRefresh + bSynchAddress)
+// bRefresh: usually 0 for explicit feedback
+// bSynchAddress: feedback EP address (e.g. 0x81)
+#define TUD_STD_EP_DESC_LEN_9                0x09
+
+#define TUD_AUDIO_DESC_STD_AS_ISO_EP_SYNC(_ep, _attr, _maxEPsize, _interval, _sync_epaddr) \
+    TUD_STD_EP_DESC_LEN_9, TUSB_DESC_ENDPOINT, (_ep), (_attr), U16_TO_U8S_LE(_maxEPsize), (_interval), 0x00, (_sync_epaddr)
 
 #define TUD_AUDIO_HEADSET_STEREO_DESC_LEN (TUD_AUDIO_DESC_IAD_LEN\
     + TUD_AUDIO_DESC_STD_AC_LEN\
@@ -76,21 +89,21 @@ extern uint8_t const desc_ms_os_20[];
     + TUD_AUDIO_DESC_STD_AS_INT_LEN\
     + TUD_AUDIO_DESC_CS_AS_INT_LEN\
     + TUD_AUDIO_DESC_TYPE_I_FORMAT_LEN\
-    + TUD_AUDIO_DESC_STD_AS_ISO_EP_LEN\
+    + (TUD_AUDIO_DESC_STD_AS_ISO_EP_LEN + 2)\
     + TUD_AUDIO_DESC_CS_AS_ISO_EP_LEN\
     + TUD_AUDIO_DESC_STD_AS_ISO_FB_EP_LEN\
     /* Interface 1, Alternate 2 */\
     + TUD_AUDIO_DESC_STD_AS_INT_LEN\
     + TUD_AUDIO_DESC_CS_AS_INT_LEN\
     + TUD_AUDIO_DESC_TYPE_I_FORMAT_LEN\
-    + TUD_AUDIO_DESC_STD_AS_ISO_EP_LEN\
+    + (TUD_AUDIO_DESC_STD_AS_ISO_EP_LEN + 2)\
     + TUD_AUDIO_DESC_CS_AS_ISO_EP_LEN\
     + TUD_AUDIO_DESC_STD_AS_ISO_FB_EP_LEN\
     /* Interface 1, Alternate 3 */\
     + TUD_AUDIO_DESC_STD_AS_INT_LEN\
     + TUD_AUDIO_DESC_CS_AS_INT_LEN\
     + TUD_AUDIO_DESC_TYPE_I_FORMAT_LEN\
-    + TUD_AUDIO_DESC_STD_AS_ISO_EP_LEN\
+    + (TUD_AUDIO_DESC_STD_AS_ISO_EP_LEN + 2)\
     + TUD_AUDIO_DESC_CS_AS_ISO_EP_LEN\
     + TUD_AUDIO_DESC_STD_AS_ISO_FB_EP_LEN)
 
@@ -124,7 +137,7 @@ extern uint8_t const desc_ms_os_20[];
     /* Type I Format Type Descriptor(2.3.1.6 - Audio Formats) */\
     TUD_AUDIO_DESC_TYPE_I_FORMAT(CFG_TUD_AUDIO_FUNC_1_FORMAT_1_N_BYTES_PER_SAMPLE_RX, CFG_TUD_AUDIO_FUNC_1_FORMAT_1_RESOLUTION_RX),\
     /* Standard AS Isochronous Audio Data Endpoint Descriptor(4.10.1.1) */\
-    TUD_AUDIO_DESC_STD_AS_ISO_EP(/*_ep*/ _epout, /*_attr*/ (uint8_t) (TUSB_XFER_ISOCHRONOUS | TUSB_ISO_EP_ATT_ASYNCHRONOUS | TUSB_ISO_EP_ATT_DATA), /*_maxEPsize*/ TUD_AUDIO_EP_SIZE(CFG_TUD_AUDIO_FUNC_1_MAX_SAMPLE_RATE, CFG_TUD_AUDIO_FUNC_1_FORMAT_1_N_BYTES_PER_SAMPLE_RX, CFG_TUD_AUDIO_FUNC_1_N_CHANNELS_RX), /*_interval*/ 0x01),\
+    TUD_AUDIO_DESC_STD_AS_ISO_EP_SYNC(/*_ep*/ _epout, /*_attr*/ (uint8_t)(TUSB_XFER_ISOCHRONOUS | TUSB_ISO_EP_ATT_ASYNCHRONOUS | TUSB_ISO_EP_ATT_DATA), /*_maxEPsize*/ TUD_AUDIO_EP_SIZE(CFG_TUD_AUDIO_FUNC_1_MAX_SAMPLE_RATE, CFG_TUD_AUDIO_FUNC_1_FORMAT_1_N_BYTES_PER_SAMPLE_RX, CFG_TUD_AUDIO_FUNC_1_N_CHANNELS_RX), /*_interval*/ 0x01, /*_sync_epaddr*/ _epfb),\
     /* Class-Specific AS Isochronous Audio Data Endpoint Descriptor(4.10.1.2) */\
     TUD_AUDIO_DESC_CS_AS_ISO_EP(/*_attr*/ AUDIO_CS_AS_ISO_DATA_EP_ATT_NON_MAX_PACKETS_OK, /*_ctrl*/ AUDIO_CTRL_NONE, /*_lockdelayunit*/ AUDIO_CS_AS_ISO_DATA_EP_LOCK_DELAY_UNIT_MILLISEC, /*_lockdelay*/ 0x0001),\
     /* Standard AS Isochronous Feedback Endpoint Descriptor(4.10.2.1) */\
@@ -137,7 +150,7 @@ extern uint8_t const desc_ms_os_20[];
     /* Type I Format Type Descriptor(2.3.1.6 - Audio Formats) */\
     TUD_AUDIO_DESC_TYPE_I_FORMAT(CFG_TUD_AUDIO_FUNC_1_FORMAT_2_N_BYTES_PER_SAMPLE_RX, CFG_TUD_AUDIO_FUNC_1_FORMAT_2_RESOLUTION_RX),\
     /* Standard AS Isochronous Audio Data Endpoint Descriptor(4.10.1.1) */\
-    TUD_AUDIO_DESC_STD_AS_ISO_EP(/*_ep*/ _epout, /*_attr*/ (uint8_t) (TUSB_XFER_ISOCHRONOUS | TUSB_ISO_EP_ATT_ASYNCHRONOUS | TUSB_ISO_EP_ATT_DATA), /*_maxEPsize*/ TUD_AUDIO_EP_SIZE(CFG_TUD_AUDIO_FUNC_1_MAX_SAMPLE_RATE, CFG_TUD_AUDIO_FUNC_1_FORMAT_2_N_BYTES_PER_SAMPLE_RX, CFG_TUD_AUDIO_FUNC_1_N_CHANNELS_RX), /*_interval*/ 0x01),\
+    TUD_AUDIO_DESC_STD_AS_ISO_EP_SYNC(/*_ep*/ _epout, /*_attr*/ (uint8_t)(TUSB_XFER_ISOCHRONOUS | TUSB_ISO_EP_ATT_ASYNCHRONOUS | TUSB_ISO_EP_ATT_DATA), /*_maxEPsize*/ TUD_AUDIO_EP_SIZE(CFG_TUD_AUDIO_FUNC_1_MAX_SAMPLE_RATE, CFG_TUD_AUDIO_FUNC_1_FORMAT_2_N_BYTES_PER_SAMPLE_RX, CFG_TUD_AUDIO_FUNC_1_N_CHANNELS_RX), /*_interval*/ 0x01, /*_sync_epaddr*/ _epfb),\
     /* Class-Specific AS Isochronous Audio Data Endpoint Descriptor(4.10.1.2) */\
     TUD_AUDIO_DESC_CS_AS_ISO_EP(/*_attr*/ AUDIO_CS_AS_ISO_DATA_EP_ATT_NON_MAX_PACKETS_OK, /*_ctrl*/ AUDIO_CTRL_NONE, /*_lockdelayunit*/ AUDIO_CS_AS_ISO_DATA_EP_LOCK_DELAY_UNIT_MILLISEC, /*_lockdelay*/ 0x0001),\
     /* Standard AS Isochronous Feedback Endpoint Descriptor(4.10.2.1) */\
@@ -150,7 +163,7 @@ extern uint8_t const desc_ms_os_20[];
     /* Type I Format Type Descriptor(2.3.1.6 - Audio Formats) */\
     TUD_AUDIO_DESC_TYPE_I_FORMAT(CFG_TUD_AUDIO_FUNC_1_FORMAT_3_N_BYTES_PER_SAMPLE_RX, CFG_TUD_AUDIO_FUNC_1_FORMAT_3_RESOLUTION_RX),\
     /* Standard AS Isochronous Audio Data Endpoint Descriptor(4.10.1.1) */\
-    TUD_AUDIO_DESC_STD_AS_ISO_EP(/*_ep*/ _epout, /*_attr*/ (TUSB_XFER_ISOCHRONOUS | TUSB_ISO_EP_ATT_ASYNCHRONOUS | TUSB_ISO_EP_ATT_DATA), /*_maxEPsize*/ TUD_AUDIO_EP_SIZE(CFG_TUD_AUDIO_FUNC_1_MAX_SAMPLE_RATE, CFG_TUD_AUDIO_FUNC_1_FORMAT_3_N_BYTES_PER_SAMPLE_RX, CFG_TUD_AUDIO_FUNC_1_N_CHANNELS_RX), /*_interval*/ 0x01),\
+    TUD_AUDIO_DESC_STD_AS_ISO_EP_SYNC(/*_ep*/ _epout, /*_attr*/ (uint8_t)(TUSB_XFER_ISOCHRONOUS | TUSB_ISO_EP_ATT_ASYNCHRONOUS | TUSB_ISO_EP_ATT_DATA), /*_maxEPsize*/ TUD_AUDIO_EP_SIZE(CFG_TUD_AUDIO_FUNC_1_MAX_SAMPLE_RATE, CFG_TUD_AUDIO_FUNC_1_FORMAT_3_N_BYTES_PER_SAMPLE_RX, CFG_TUD_AUDIO_FUNC_1_N_CHANNELS_RX), /*_interval*/ 0x01, /*_sync_epaddr*/ _epfb),\
     /* Class-Specific AS Isochronous Audio Data Endpoint Descriptor(4.10.1.2) */\
     TUD_AUDIO_DESC_CS_AS_ISO_EP(/*_attr*/ AUDIO_CS_AS_ISO_DATA_EP_ATT_NON_MAX_PACKETS_OK, /*_ctrl*/ AUDIO_CTRL_NONE, /*_lockdelayunit*/ AUDIO_CS_AS_ISO_DATA_EP_LOCK_DELAY_UNIT_MILLISEC, /*_lockdelay*/ 0x0001),\
     /* Standard AS Isochronous Feedback Endpoint Descriptor(4.10.2.1) */\

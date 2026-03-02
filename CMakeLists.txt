@@ -65,6 +65,7 @@ pico_sdk_init()
 add_executable(beyondex_usb_speaker
         main.c
         usb_descriptors.c
+        beyondex_diag.c
         )
 
 pico_set_program_name(beyondex_usb_speaker "beyondex_usb_speaker")

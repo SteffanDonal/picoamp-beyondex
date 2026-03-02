@@ -106,7 +106,7 @@ extern "C" {
 //------------- CLASS -------------//
 #define CFG_TUD_CDC               0
 #define CFG_TUD_MSC               0
-#define CFG_TUD_HID               0
+#define CFG_TUD_HID               BEYONDEX_HID_DEBUG
 #define CFG_TUD_MIDI              0
 #define CFG_TUD_AUDIO             1
 #define CFG_TUD_VENDOR            1
@@ -155,7 +155,7 @@ extern "C" {
 #define CFG_TUD_AUDIO_FUNC_1_EP_OUT_SZ_MAX        CFG_TUD_AUDIO_FUNC_1_FORMAT_3_EP_SZ_OUT // Maximum EP IN size for all AS alternate settings used
 
 // Number of Standard AS Interface Descriptors (4.9.1) defined per audio function - this is required to be able to remember the current alternate settings of these interfaces - We restrict us here to have a constant number for all audio functions (which means this has to be the maximum number of AS interfaces an audio function has and a second audio function with less AS interfaces just wastes a few bytes)
-#define CFG_TUD_AUDIO_FUNC_1_N_AS_INT 	          2
+#define CFG_TUD_AUDIO_FUNC_1_N_AS_INT 	          1
 
 // Size of control request buffer
 #define CFG_TUD_AUDIO_FUNC_1_CTRL_BUF_SZ	64

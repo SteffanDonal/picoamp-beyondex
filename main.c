@@ -47,6 +47,7 @@
 #include "bsp/board_api.h"
 #include "tusb.h"
 #include "usb_descriptors.h"
+#include "beyondex_diag.h"
 
 #include "i2s.h"
 #include "dsp/eq.h"
@@ -112,83 +113,20 @@ const uint8_t resolutions_per_format[CFG_TUD_AUDIO_FUNC_1_N_FORMATS] = {CFG_TUD_
 // Current resolution, update on format change
 uint8_t current_resolution;
 
+static volatile bool spk_streaming_active;
+
+uint32_t feedback;
+uint32_t sof_calls;
+uint32_t sof_updates;
+
 void led_blinking_task(void);
 void audio_task(void);
 void bootsel_task(void);
 
 static void reboot_to_bootsel(void);
 
-//-----------------------------------------------------------------------------
-// Optional debug UART (does not use stdio; safe for USB audio timing).
-//
-// Connect a USB-UART dongle:
-// - Pico GP0 (UART0 TX) -> dongle RX
-// - Pico GND -> dongle GND
-// 115200 8N1
-//-----------------------------------------------------------------------------
-#ifndef BEYONDEX_DEBUG_UART
-#define BEYONDEX_DEBUG_UART 0
-#endif
-
-#if BEYONDEX_DEBUG_UART
-#define DBG_UART_ID uart0
-#define DBG_UART_BAUD 115200
-#define DBG_UART_TX_PIN 0
-#define DBG_UART_RX_PIN 1
-
-static inline void dbg_uart_puts(const char *s) {
-  while (*s) uart_putc_raw(DBG_UART_ID, *s++);
-}
-
-static void dbg_uart_put_u32(uint32_t v) {
-  char buf[11];
-  int i = 0;
-  if (v == 0) {
-    uart_putc_raw(DBG_UART_ID, '0');
-    return;
-  }
-  while (v && i < (int)sizeof(buf)) {
-    buf[i++] = (char)('0' + (v % 10));
-    v /= 10;
-  }
-  while (i--) uart_putc_raw(DBG_UART_ID, buf[i]);
-}
-
-static void dbg_uart_put_i32(int32_t v) {
-  if (v < 0) {
-    uart_putc_raw(DBG_UART_ID, '-');
-    // careful with INT32_MIN
-    uint32_t uv = (uint32_t)(-(v + 1)) + 1u;
-    dbg_uart_put_u32(uv);
-  } else {
-    dbg_uart_put_u32((uint32_t)v);
-  }
-}
-
-static void debug_uart_init(void) {
-  uart_init(DBG_UART_ID, DBG_UART_BAUD);
-  gpio_set_function(DBG_UART_TX_PIN, GPIO_FUNC_UART);
-  gpio_set_function(DBG_UART_RX_PIN, GPIO_FUNC_UART);
-  uart_set_format(DBG_UART_ID, 8, 1, UART_PARITY_NONE);
-  uart_set_fifo_enabled(DBG_UART_ID, false);
-}
-
-static void debug_uart_task(void) {
-  static uint32_t last_ms = 0;
-  uint32_t now = board_millis();
-  if (now - last_ms < 1000) return;
-  last_ms += 1000;
-
-  dbg_uart_puts("buf_len=");
-  dbg_uart_put_i32(i2s_get_buf_length());
-  dbg_uart_puts(" buf_us=");
-  dbg_uart_put_i32(i2s_get_buf_us());
-  dbg_uart_puts(" underrun=");
-  dbg_uart_put_u32(i2s_dbg_get_underrun_count());
-  dbg_uart_puts(" overflow=");
-  dbg_uart_put_u32(i2s_dbg_get_overflow_count());
-  dbg_uart_puts("\r\n");
-}
+#if BEYONDEX_HID_DEBUG
+static void hid_diag_task(void);
 #endif
 
 // Vendor control request: reboot into BOOTSEL (ROM USB boot)
@@ -199,14 +137,6 @@ static void debug_uart_task(void) {
 // Vendor control request: read audio debug stats
 // bmRequestType: 0xC0 (Device-to-host | Vendor | Device)
 #define BEYONDEX_USB_REQ_AUDIO_DIAG 0x43
-
-typedef struct __attribute__((packed)) {
-  uint32_t magic;     // 'BEXD' = 0x44584542
-  uint32_t underrun;  // i2s_dbg_get_underrun_count()
-  uint32_t overflow;  // i2s_dbg_get_overflow_count()
-  int32_t  buf_len;   // i2s_get_buf_length()
-  int32_t  buf_us;    // i2s_get_buf_us()
-} beyondex_audio_diag_t;
 
 // Vendor control request: get/set channel swap
 #define BEYONDEX_USB_REQ_CHANNEL_SWAP 0x44
@@ -271,10 +201,6 @@ int main(void)
   i2s_mclk_set_pin(18, 16, 22);
   i2s_mclk_init(current_sample_rate);
 
-#if BEYONDEX_DEBUG_UART
-  debug_uart_init();
-#endif
-
   settings_load();
 
   // init device stack on configured roothub port
@@ -308,8 +234,8 @@ int main(void)
 #endif
     led_blinking_task();
     bootsel_task();
-#if BEYONDEX_DEBUG_UART
-    debug_uart_task();
+#if BEYONDEX_HID_DEBUG
+    hid_diag_task();
 #endif
   }
 }
@@ -811,3 +737,26 @@ static void reboot_to_bootsel(void)
   reset_usb_boot(0u, 0u);
   while (1) { tight_loop_contents(); }
 }
+
+#if BEYONDEX_HID_DEBUG
+//--------------------------------------------------------------------+
+// HID DEBUG TASK
+//--------------------------------------------------------------------+
+
+static void hid_diag_task(void)
+{
+  static uint32_t last_ms = 0;
+  uint32_t now = board_millis();
+  if (now - last_ms < 200)
+    return;
+  last_ms += 200;
+
+  if (!tud_hid_ready())
+    return;
+
+  uint8_t p[sizeof(beyondex_audio_diag_t)];
+  beyondex_get_audio_diag_payload(p, feedback, sof_calls, sof_updates, spk_streaming_active);
+
+  tud_hid_report(0, p, sizeof(p));
+}
+#endif

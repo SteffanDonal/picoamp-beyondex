@@ -37,6 +37,7 @@
 #include "bsp/board_api.h"
 #include "tusb.h"
 #include "usb_descriptors.h"
+#include "beyondex_diag.h"
 
 /* A combination of interfaces must have a unique product id, since PC will save device driver after the first plug.
  * Same VID/PID with different interface e.g MSC (first), then CDC (later) will possibly cause system error on PC.
@@ -85,7 +86,13 @@ uint8_t const * tud_descriptor_device_cb(void)
 //--------------------------------------------------------------------+
 // Configuration Descriptor
 //--------------------------------------------------------------------+
-#define CONFIG_TOTAL_LEN    	(TUD_CONFIG_DESC_LEN + CFG_TUD_AUDIO * TUD_AUDIO_HEADSET_STEREO_DESC_LEN + TUD_VENDOR_DESC_LEN)
+#if BEYONDEX_HID_DEBUG
+#define DIAG_HID_DESC_LEN (TUD_HID_DESC_LEN)
+#else
+#define DIAG_HID_DESC_LEN (0)
+#endif
+
+#define CONFIG_TOTAL_LEN    	(TUD_CONFIG_DESC_LEN + CFG_TUD_AUDIO * TUD_AUDIO_HEADSET_STEREO_DESC_LEN + TUD_VENDOR_DESC_LEN + DIAG_HID_DESC_LEN)
 
 #if CFG_TUSB_MCU == OPT_MCU_LPC175X_6X || CFG_TUSB_MCU == OPT_MCU_LPC177X_8X || CFG_TUSB_MCU == OPT_MCU_LPC40XX
   // LPC 17xx and 40xx endpoint type (bulk/interrupt/iso) are fixed by its number
@@ -118,6 +125,15 @@ uint8_t const * tud_descriptor_device_cb(void)
   #define EPNUM_VENDOR_IN   0x82
 #endif
 
+#if BEYONDEX_HID_DEBUG
+static const uint8_t hid_report_desc_diag[] = {
+    TUD_HID_REPORT_DESC_GENERIC_INOUT(sizeof(beyondex_audio_diag_t))};
+
+// HID diagnostics endpoint (interrupt IN). Choose an endpoint number that
+// doesn't conflict with the audio OUT/FB endpoints above.
+#define EPNUM_HID_DIAG_IN 0x03
+#endif
+
 uint8_t const desc_configuration[] =
 {
     // Config number, interface count, string index, total length, attribute, power in mA
@@ -127,7 +143,15 @@ uint8_t const desc_configuration[] =
     TUD_AUDIO_HEADSET_STEREO_DESCRIPTOR(4, EPNUM_AUDIO_OUT, EPNUM_AUDIO_FB | 0x80, 4),
 
     // Vendor interface for WebUSB control transfers (WinUSB on Windows)
-    TUD_VENDOR_DESCRIPTOR(ITF_NUM_VENDOR, 0, EPNUM_VENDOR_OUT, EPNUM_VENDOR_IN, 64)
+    TUD_VENDOR_DESCRIPTOR(ITF_NUM_VENDOR, 0, EPNUM_VENDOR_OUT, EPNUM_VENDOR_IN, 64),
+
+#if BEYONDEX_HID_DEBUG
+    // HID Diagnostics Interface (driverless on Windows)
+    // One interrupt IN endpoint carrying a vendor-defined report.
+    TUD_HID_DESCRIPTOR(ITF_NUM_HID_DIAG, 6, HID_ITF_PROTOCOL_NONE,
+                        sizeof(hid_report_desc_diag),
+                        EPNUM_HID_DIAG_IN | 0x80, 32, 10)
+#endif
 };
 
 // Invoked when received GET CONFIGURATION DESCRIPTOR
@@ -199,6 +223,38 @@ uint8_t const desc_ms_os_20[] =
 TU_VERIFY_STATIC(sizeof(desc_ms_os_20) == MS_OS_20_DESC_LEN, "Incorrect size");
 
 //--------------------------------------------------------------------+
+// HID Debug Descriptor Set
+//--------------------------------------------------------------------+
+
+#if BEYONDEX_HID_DEBUG
+uint8_t const *tud_hid_descriptor_report_cb(uint8_t instance)
+{
+  (void)instance;
+  return hid_report_desc_diag;
+}
+
+uint16_t tud_hid_get_report_cb(uint8_t instance, uint8_t report_id, hid_report_type_t report_type, uint8_t *buffer, uint16_t reqlen)
+{
+  (void)instance;
+  (void)report_id;
+  (void)report_type;
+  (void)buffer;
+  (void)reqlen;
+  return 0;
+}
+
+void tud_hid_set_report_cb(uint8_t instance, uint8_t report_id, hid_report_type_t report_type, uint8_t const *buffer, uint16_t bufsize)
+{
+  (void)instance;
+  (void)report_id;
+  (void)report_type;
+  (void)buffer;
+  (void)bufsize;
+}
+#endif
+
+
+//--------------------------------------------------------------------+
 // String Descriptors
 //--------------------------------------------------------------------+
 
@@ -219,6 +275,9 @@ char const *string_desc_arr[] =
   NULL,                           // 3: Serials will use unique ID if possible
   "Beyondex HD Audio",            // 4: Audio Interface
   "Beyondex HD Audio",          // 5: Audio Interface
+#if BEYONDEX_HID_DEBUG
+  "Beyondex HD Audio",             // 6: HID Diagnostics Interface
+#endif
 };
 
 static uint16_t _desc_str[32 + 1];
